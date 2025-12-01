@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>翻牌记忆力游戏（4×4）</title>
+  <style>
+    :root{--gap:12px;--card-size:90px;--smiley-font:28px}
+    body{font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:24px; background:#f7fafc; color:#111}
+    header{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:18px}
+    h1{margin:0;font-size:20px}
+    #victory{color:#c92a2a;font-weight:700;font-size:48px;display:none}
+
+    .controls{display:flex;gap:10px;align-items:center}
+    button{padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:white;cursor:pointer;font-weight:600}
+    button:disabled{opacity:.5;cursor:not-allowed}
+
+    .board{width:calc(var(--card-size)*4 + var(--gap)*3);max-width:100%;display:grid;grid-template-columns:repeat(4,1fr);grid-gap:var(--gap);margin:18px auto}
+
+    .card{width:100%;aspect-ratio:1/1;position:relative;perspective:800px}
+    .inner{position:absolute;inset:0;transition:transform .5s;transform-style:preserve-3d;border-radius:12px}
+    .card.flipped .inner{transform:rotateY(180deg)}
+
+    .face{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:12px;backface-visibility:hidden;box-shadow:0 4px 8px rgba(2,6,23,.08)}
+    .front{background:#fff;border:1px solid #e6eef6;font-size:18px;padding:6px;transform:rotateY(180deg);}
+    .back{background:linear-gradient(180deg,#e6f2ff,#dbeefb);border:1px solid #cfe6ff;font-size:var(--smiley-font)}
+
+    .hidden{visibility:hidden}
+    #status{margin-top:6px;text-align:center;color:#444}
+
+    @media (max-width:420px){:root{--card-size:76px;--gap:8px} #victory{font-size:36px}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>翻牌记忆力游戏（4×4）</h1>
+    <div id="victory">胜利</div>
+    <div class="controls">
+      <button id="dealBtn">发牌</button>
+      <button id="startBtn" disabled>开始</button>
+      <div id="status">请先点击“发牌”来发放单词。</div>
+    </div>
+  </header>
+
+  <main>
+    <div class="board" id="board" aria-live="polite"></div>
+  </main>
+
+  <script>
+    // 词库（适合三年级的常见英文单词）
+    const WORD_BANK = [
+      'cat','dog','book','school','water','apple','chair','table',
+      'house','tree','friend','family','teacher','music','pencil','lunch'
+    ];
+
+    const boardEl = document.getElementById('board');
+    const dealBtn = document.getElementById('dealBtn');
+    const startBtn = document.getElementById('startBtn');
+    const statusEl = document.getElementById('status');
+    const victoryEl = document.getElementById('victory');
+
+    let cards = []; // {word, id, matched}
+    let firstPick = null;
+    let secondPick = null;
+    let clickable = false;
+    let revealedDuringStart = false;
+
+    function shuffleArray(a){
+      for(let i=a.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];
+      }
+      return a;
+    }
+
+    function makePairs(){
+      // choose 8 distinct words from bank
+      const pool = [...WORD_BANK];
+      shuffleArray(pool);
+      const chosen = pool.slice(0,8);
+      const pairList = [];
+      chosen.forEach(w=>{pairList.push(w);pairList.push(w)});
+      shuffleArray(pairList);
+      cards = pairList.map((word,idx)=>({word, id:idx, matched:false}));
+    }
+
+    function renderBoard(showFront=false){
+      boardEl.innerHTML = '';
+      cards.forEach((c, idx)=>{
+        const card = document.createElement('div');
+        card.className = 'card' + (showFront ? ' flipped' : '');
+        card.dataset.index = idx;
+        card.setAttribute('role','button');
+        card.setAttribute('aria-label', showFront ? ('单词：'+c.word) : '背面卡片');
+
+        const inner = document.createElement('div'); inner.className='inner';
+        const faceFront = document.createElement('div'); faceFront.className='face front'; faceFront.textContent = c.word;
+        const faceBack = document.createElement('div'); faceBack.className='face back'; faceBack.textContent = '😊';
+
+        inner.appendChild(faceFront); inner.appendChild(faceBack);
+        card.appendChild(inner);
+
+        if(c.matched) card.classList.add('flipped');
+
+        card.addEventListener('click', onCardClick);
+        boardEl.appendChild(card);
+      });
+    }
+
+    function onCardClick(e){
+      if(!clickable) return;
+      const cardEl = e.currentTarget;
+      const idx = Number(cardEl.dataset.index);
+      const cardObj = cards[idx];
+      if(cardObj.matched) return; // already matched
+      if(cardEl.classList.contains('flipped')) return; // already face up
+
+      flipUp(cardEl);
+
+      if(!firstPick){ firstPick = {idx, el:cardEl}; return; }
+      if(firstPick && firstPick.idx === idx) return; // same card
+
+      secondPick = {idx, el:cardEl};
+      clickable = false; // lock until evaluation
+
+      const w1 = cards[firstPick.idx].word;
+      const w2 = cards[secondPick.idx].word;
+
+      if(w1 === w2){
+        // match
+        cards[firstPick.idx].matched = true;
+        cards[secondPick.idx].matched = true;
+        setTimeout(()=>{
+          firstPick = null; secondPick = null; clickable = true; checkVictory();
+        }, 600);
+      } else {
+        // not match -> flip back after short delay
+        setTimeout(()=>{
+          flipDown(firstPick.el);
+          flipDown(secondPick.el);
+          firstPick = null; secondPick = null; clickable = true;
+        }, 800);
+      }
+    }
+
+    function flipUp(cardEl){
+      cardEl.classList.add('flipped');
+    }
+    function flipDown(cardEl){
+      cardEl.classList.remove('flipped');
+    }
+
+    function checkVictory(){
+      const allMatched = cards.every(c=>c.matched);
+      if(allMatched){
+        victoryEl.style.display = 'block';
+        statusEl.textContent = '恭喜你，全部配对完成！';
+        clickable = false;
+      }
+    }
+
+    // 发牌按钮：生成新牌并全部正面朝上，显示随机8组单词
+    dealBtn.addEventListener('click', ()=>{
+      makePairs();
+      victoryEl.style.display='none';
+      renderBoard(true);
+      statusEl.textContent = '已发牌：观察单词，然后点击“开始”开始游戏。';
+      startBtn.disabled = false;
+      clickable = false;
+      firstPick = null; secondPick = null;
+      revealedDuringStart = true;
+    });
+
+    // 开始按钮：先把所有翻回背面，显示笑脸，然后显示10秒后再翻到背面（题意要求：当点击“开始”按钮后，所偶牌正面朝上，显示10秒后，再翻转到背面。）
+    startBtn.addEventListener('click', ()=>{
+      if(cards.length!==16) return;
+      victoryEl.style.display='none';
+      statusEl.textContent = '准备中：10秒后开始游戏，请记住单词位置。';
+      // ensure all face up briefly, then flip to back after 10s
+      renderBoard(true);
+      startBtn.disabled = true; dealBtn.disabled = true;
+      // give 10 seconds of visibility
+      setTimeout(()=>{
+        // flip all to back
+        document.querySelectorAll('.card').forEach(c=>c.classList.remove('flipped'));
+        statusEl.textContent = '开始！请翻牌配对。';
+        clickable = true;
+        dealBtn.disabled = false;
+      }, 10000);
+    });
+
+    // Initialize empty board
+    function initEmpty(){
+      cards = Array.from({length:16}).map((_,i)=>({word:'',id:i,matched:false}));
+      boardEl.innerHTML = '';
+      for(let i=0;i<16;i++){
+        const card = document.createElement('div'); card.className='card'; card.dataset.index=i;
+        const inner = document.createElement('div'); inner.className='inner';
+        const faceFront = document.createElement('div'); faceFront.className='face front'; faceFront.textContent = '';
+        const faceBack = document.createElement('div'); faceBack.className='face back'; faceBack.textContent = '😊';
+        inner.appendChild(faceFront); inner.appendChild(faceBack); card.appendChild(inner);
+        boardEl.appendChild(card);
+      }
+    }
+
+    // load
+    initEmpty();
+  </script>
+</body>
+</html>
